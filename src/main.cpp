@@ -1,7 +1,3 @@
-//
-// Created by zxsrxt on 12.03.2026.
-//
-
 #include <Windows.h>
 #include <iostream>
 

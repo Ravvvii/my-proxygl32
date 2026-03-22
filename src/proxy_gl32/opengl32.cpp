@@ -2,6 +2,16 @@
 #include <stdio.h>
 #include "proxy_gl32.h"
 
+typedef const GLubyte* (WINAPI* PFN_glGetString)(GLenum name);
+typedef void (WINAPI* PFN_glEnable)(GLenum cap);
+typedef void (WINAPI* PFN_glTexParameterf)(GLenum target, GLenum pname, GLfloat param);
+typedef PROC (WINAPI* PFN_wglGetProcAddress)(LPCSTR name);
+typedef BOOL (WINAPI* PFN_wglSwapBuffers)(HDC hdc);
+PFN_glGetString orig_glGetString = nullptr;
+PFN_glEnable orig_glEnable = nullptr;
+PFN_glTexParameterf orig_glTexParameterf = nullptr;
+PFN_wglGetProcAddress orig_wglGetProcAddress = nullptr;
+PFN_wglSwapBuffers orig_wglSwapBuffers = nullptr;
 HINSTANCE mHinst = 0, mHinstDLL = 0;
 
 extern "C" UINT_PTR mProcs[368] = {0};
@@ -377,6 +387,39 @@ LPCSTR mImportNames[] = {
   "wglUseFontOutlinesW",
 };
 
+const GLubyte* WINAPI h_glGetString(GLenum name) {
+    if (name == GL_VENDOR) return (const GLubyte*)"NVIDIA Corporation";
+    if (name == GL_RENDERER) return (const GLubyte*)"NVIDIA GeForce RTX 4090";
+    if (name == GL_VERSION) return (const GLubyte*)"4.6.0 NVIDIA 551.23";
+
+    return orig_glGetString(name);
+}
+
+void WINAPI h_glEnable(GLenum cap) {
+    if (cap == GL_FOG || cap == GL_LIGHTING) return;
+    orig_glEnable(cap);
+}
+
+void WINAPI h_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
+    if (pname == GL_TEXTURE_LOD_BIAS) {
+        return orig_glTexParameterf(target, pname, 3.0f);
+    }
+    orig_glTexParameterf(target, pname, param);
+}
+
+BOOL WINAPI h_wglSwapBuffers(HDC hdc) {
+    glFlush();
+    return orig_wglSwapBuffers(hdc);
+}
+
+PROC WINAPI h_wglGetProcAddress(LPCSTR name) {
+    PROC proc = orig_wglGetProcAddress(name);
+    if (name && strcmp(name, "wglSwapIntervalEXT") == 0) {
+        return (PROC)[](int i) { return TRUE; }; 
+    }
+    return proc;
+}
+
 #ifndef _DEBUG
 inline void log_info(const char* info) {
 }
@@ -391,6 +434,31 @@ inline void log_info(const char* info) {
 #include "empty.h"
 
 inline void _hook_setup() {
+  for (int i = 0; i < 368; i++) {
+    if (!mImportNames[i]) continue;
+    
+    if (strcmp(mImportNames[i], "glTexParameterf") == 0) {
+        orig_glTexParameterf = (PFN_glTexParameterf)mProcs[i];
+        mProcs[i] = (UINT_PTR)h_glTexParameterf;
+    }
+    else if (strcmp(mImportNames[i], "glGetString") == 0) {
+        orig_glGetString = (PFN_glGetString)mProcs[i];
+        mProcs[i] = (UINT_PTR)h_glGetString;
+    }
+    else if (strcmp(mImportNames[i], "glEnable") == 0) {
+        orig_glEnable = (PFN_glEnable)mProcs[i];
+        mProcs[i] = (UINT_PTR)h_glEnable;
+    }
+    else if (strcmp(mImportNames[i], "wglSwapBuffers") == 0) {
+        orig_wglSwapBuffers = (PFN_wglSwapBuffers)mProcs[i];
+        mProcs[i] = (UINT_PTR)h_wglSwapBuffers;
+    }
+    else if (strcmp(mImportNames[i], "wglGetProcAddress") == 0) {
+        orig_wglGetProcAddress = (PFN_wglGetProcAddress)mProcs[i];
+        mProcs[i] = (UINT_PTR)h_wglGetProcAddress;
+    }
+}
+
 #ifdef GLMFBEGINGLSBLOCK
   GlmfBeginGlsBlock_real = (GlmfBeginGlsBlock_ptr)mProcs[0];
   mProcs[0] = (UINT_PTR)&GlmfBeginGlsBlock_fake;
@@ -885,7 +953,8 @@ inline void _hook_setup() {
 #endif
 #ifdef GLGETPOLYGONSTIPPLE
   glGetPolygonStipple_real = (glGetPolygonStipple_ptr)mProcs[123];
-  mProcs[123] = (UINT_PTR)&glGetPolygonStipple_fake;
+  orig_glGetString = (PFN_glGetString)mProcs[124];
+  mProcs[124] = (UINT_PTR)h_glGetString;
 #endif
 #ifdef GLGETSTRING
   glGetString_real = (glGetString_ptr)mProcs[124];
